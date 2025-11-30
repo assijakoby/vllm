@@ -31,11 +31,11 @@ from vllm.model_executor.layers.mamba.mamba_utils import (
     MambaStateShapeCalculator,
 )
 
-#from vllm.model_executor.layers.mamba.ops.causal_conv1d_pytorch import causal_conv1d_fn
-#from vllm.model_executor.layers.mamba.ops.causal_conv1d_pytorch import causal_conv1d_update
+from vllm.model_executor.layers.mamba.ops.causal_conv1d_pytorch import causal_conv1d_fn
+from vllm.model_executor.layers.mamba.ops.causal_conv1d_pytorch import causal_conv1d_update
 
-from vllm.model_executor.layers.mamba.ops.causal_conv1d import causal_conv1d_fn
-from vllm.model_executor.layers.mamba.ops.causal_conv1d import causal_conv1d_update
+#from vllm.model_executor.layers.mamba.ops.causal_conv1d import causal_conv1d_fn
+#from vllm.model_executor.layers.mamba.ops.causal_conv1d import causal_conv1d_update
 
 
 from vllm.model_executor.layers.mamba.ops.layernorm_gated import rms_norm_gated

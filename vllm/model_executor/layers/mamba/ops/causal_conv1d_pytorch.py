@@ -174,7 +174,27 @@ def _flatten_inputs_for_update(
 
     raise ValueError("Could not infer how to flatten 'x' for the provided dimensions.")
 
+"""
+Workign version with gpu indexing   
+lm_eval --model vllm --model_args pretrained=ibm-granite/granite-4.0-h-small,enforce_eager=False --tasks gsm8k --batch_size auto
+| 1319/1319 [05:27<00:00,  4.02it/s] 29sec till first question output
+[2025-11-30 16:42:41] INFO evaluation_tracker.py:280: Output path not provided, skipping saving results aggregated
+vllm (pretrained=ibm-granite/granite-4.0-h-small,enforce_eager=False), gen_kwargs: (None), limit: None, num_fewshot: None, batch_size: auto
+|Tasks|Version|     Filter     |n-shot|  Metric   |   |Value |   |Stderr|
+|-----|------:|----------------|-----:|-----------|---|-----:|---|-----:|
+|gsm8k|      3|flexible-extract|     5|exact_match|↑  |0.8514|±  |0.0098|
+|     |       |strict-match    |     5|exact_match|↑  |0.8514|±  |0.0098|
 
+
+lm_eval --model vllm --model_args pretrained=ibm-granite/granite-4.0-h-small,enforce_eager=False --tasks gsm8k --batch_size auto
+1319/1319 [04:59<00:00,  4.40it/s]   29sec till first question output 
+[2025-11-30 16:50:12] INFO evaluation_tracker.py:280: Output path not provided, skipping saving results aggregated
+vllm (pretrained=ibm-granite/granite-4.0-h-small,enforce_eager=False), gen_kwargs: (None), limit: None, num_fewshot: None, batch_size: auto
+|Tasks|Version|     Filter     |n-shot|  Metric   |   |Value |   |Stderr|
+|-----|------:|----------------|-----:|-----------|---|-----:|---|-----:|
+|gsm8k|      3|flexible-extract|     5|exact_match|↑  |0.8514|±  |0.0098|
+|     |       |strict-match    |     5|exact_match|↑  |0.8514|±  |0.0098|
+"""
 def causal_conv1d_fn(
     x: torch.Tensor,
     weight: torch.Tensor,
@@ -335,6 +355,158 @@ def causal_conv1d_fn(
     return out.to(original_dtype)
 
 
+"""  working version with cpu indexing works with cuda compile
+lm_eval --model vllm --model_args pretrained=ibm-granite/granite-4.0-h-small,enforce_eager=False --tasks gsm8k --batch_size auto
+
+ 1319/1319 [05:12<00:00,  4.23it/s] time to first sample output 28.3sec
+[2025-11-30 16:28:28] INFO evaluation_tracker.py:280: Output path not provided, skipping saving results aggregated
+vllm (pretrained=ibm-granite/granite-4.0-h-small,enforce_eager=False), gen_kwargs: (None), limit: None, num_fewshot: None, batch_size: auto
+|Tasks|Version|     Filter     |n-shot|  Metric   |   |Value |   |Stderr|
+|-----|------:|----------------|-----:|-----------|---|-----:|---|-----:|
+|gsm8k|      3|flexible-extract|     5|exact_match|↑  |0.8514|±  |0.0098|
+|     |       |strict-match    |     5|exact_match|↑  |0.8514|±  |0.0098|
+
+lm_eval --model vllm --model_args pretrained=ibm-granite/granite-4.0-h-small,enforce_eager=False --tasks gsm8k --batch_size auto
+
+1319/1319 [04:42<00:00,  4.67it/s] time to first sample output 28.3sec
+[2025-11-30 16:59:59] INFO evaluation_tracker.py:280: Output path not provided, skipping saving results aggregated
+vllm (pretrained=ibm-granite/granite-4.0-h-small,enforce_eager=False), gen_kwargs: (None), limit: None, num_fewshot: None, batch_size: auto
+|Tasks|Version|     Filter     |n-shot|  Metric   |   |Value |   |Stderr|
+|-----|------:|----------------|-----:|-----------|---|-----:|---|-----:|
+|gsm8k|      3|flexible-extract|     5|exact_match|↑  |0.8514|±  |0.0098|
+|     |       |strict-match    |     5|exact_match|↑  |0.8514|±  |0.0098|
+
+
+lm_eval --model vllm --model_args pretrained=ibm-granite/granite-4.0-h-small,enforce_eager=True --tasks gsm8k --batch_size auto
+1319/1319 [04:36<00:00,  4.77it/s]
+[2025-11-30 17:13:41] INFO evaluation_tracker.py:280: Output path not provided, skipping saving results aggregated
+vllm (pretrained=ibm-granite/granite-4.0-h-small,enforce_eager=True), gen_kwargs: (None), limit: None, num_fewshot: None, batch_size: auto
+|Tasks|Version|     Filter     |n-shot|  Metric   |   |Value |   |Stderr|
+|-----|------:|----------------|-----:|-----------|---|-----:|---|-----:|
+|gsm8k|      3|flexible-extract|     5|exact_match|↑  |0.8491|±  |0.0099|
+|     |       |strict-match    |     5|exact_match|↑  |0.8484|±  |0.0099|
+
+
+def causal_conv1d_fn(
+    x: torch.Tensor,
+    weight: torch.Tensor,
+    bias: torch.Tensor | None,
+    conv_states: torch.Tensor | None,
+    query_start_loc: torch.Tensor,
+    cache_indices: torch.Tensor | None = None,
+    has_initial_state: torch.Tensor | None = None,
+    activation: str | None = "silu",
+    pad_slot_id: int = PAD_SLOT_ID,
+    block_idx_first_scheduled_token: torch.Tensor | None = None,
+    block_idx_last_scheduled_token: torch.Tensor | None = None,
+    initial_state_idx: torch.Tensor | None = None,
+    num_computed_tokens: torch.Tensor | None = None,
+    block_size_to_align: int = 0,
+    metadata=None,
+    validate_data: bool = False,
+):
+    if any(
+        ptr is not None
+        for ptr in (
+            block_idx_first_scheduled_token,
+            block_idx_last_scheduled_token,
+            initial_state_idx,
+            num_computed_tokens,
+        )
+    ):
+        raise NotImplementedError("Prefix caching metadata is not supported in the PyTorch reference implementation.")
+    
+    activation = _normalize_activation(activation)
+    original_dtype = x.dtype
+    work_dtype = conv_states.dtype if conv_states is not None else x.dtype
+    x_work = x.to(work_dtype)
+    weight_work = weight.to(work_dtype)
+    bias_work = bias.to(work_dtype) if bias is not None else None
+
+    if conv_states is not None and conv_states.device != x_work.device:
+        raise ValueError("'conv_states' must reside on the same device as 'x'.")
+
+    # CRITICAL FIX: Move query_start_loc to CPU and convert to list BEFORE any operations
+    # This prevents .item() calls during CUDA graph capture
+    qsl = _ensure_query_start_loc(query_start_loc)
+    assert qsl is not None
+    
+    # Convert to Python list immediately to avoid .item() during graph capture
+    # Note: qsl should already be on CPU from _flatten_inputs_for_update or _ensure_query_start_loc
+    qsl_list = qsl.cpu().tolist() if qsl.device.type != "cpu" else qsl.tolist()
+    padded_batch = len(qsl_list) - 1
+
+    dim, cu_seqlen = x_work.shape
+    _, width = weight_work.shape
+    state_len = max(width - 1, 0)
+
+    if validate_data:
+        if x_work.dim() != 2:
+            raise ValueError("'x' must be 2-D (dim, cu_seq_len).")
+        if weight_work.shape != (dim, width):
+            raise ValueError("'weight' must have shape (dim, width).")
+        if bias_work is not None and bias_work.shape != (dim,):
+            raise ValueError("'bias' must match the feature dimension.")
+        if not ((x_work.stride(0) == 1) or (x_work.stride(1) == 1)):
+            raise ValueError("Input tensor must be in channel-last or channel-first memory layout.")
+        if cache_indices is not None and cache_indices.numel() != padded_batch:
+            raise ValueError("'cache_indices' must align with the batch dimension implied by 'query_start_loc'.")
+        if has_initial_state is not None and has_initial_state.numel() != padded_batch:
+            raise ValueError("'has_initial_state' must align with 'query_start_loc'.")
+
+    weight_dw = _make_depthwise_weight(weight_work)
+
+    # CRITICAL FIX: Convert all tensors to Python lists to avoid .item() during graph capture
+    cache_indices_list = None
+    if cache_indices is not None:
+        cache_indices_list = cache_indices.cpu().tolist() if cache_indices.device.type != "cpu" else cache_indices.tolist()
+    
+    has_initial_state_list = None
+    if has_initial_state is not None:
+        has_initial_state_list = has_initial_state.cpu().tolist() if has_initial_state.device.type != "cpu" else has_initial_state.tolist()
+
+    out = torch.empty_like(x_work)
+
+    # Pre-compute all sequence boundaries using the list (no .item() calls)
+    seq_boundaries = [(qsl_list[i], qsl_list[i + 1]) for i in range(padded_batch)]
+
+    for seq_idx in range(padded_batch):
+        seq_start, seq_end = seq_boundaries[seq_idx]
+        if seq_start == seq_end:
+            continue
+
+        seq_x = x_work[:, seq_start:seq_end].contiguous()
+        init_state, cache_idx = _gather_initial_state(
+            seq_idx,
+            dim,
+            state_len,
+            conv_states,
+            cache_indices_list,  # Pass list instead of tensor
+            has_initial_state_list,  # Pass list instead of tensor
+            pad_slot_id,
+            x_work.device,
+            work_dtype,
+        )
+
+        if state_len > 0:
+            seq_input = torch.cat([init_state, seq_x], dim=1)
+        else:
+            seq_input = seq_x
+
+        seq_input = seq_input.unsqueeze(0)
+        seq_out = F.conv1d(seq_input, weight_dw, bias=bias_work, groups=dim)
+        seq_out = _apply_activation(seq_out, activation)
+        out[:, seq_start:seq_end] = seq_out.squeeze(0)
+
+        if conv_states is not None and cache_idx is not None and state_len > 0:
+            # Update cache with the latest state_len tokens for this sequence.
+            new_state = torch.cat([init_state, seq_x], dim=1)[:, -state_len:]
+            with torch.no_grad():
+                conv_states[cache_idx, :, -state_len:].copy_(new_state)
+    
+    return out.to(original_dtype)
+"""
+
 def causal_conv1d_update(
     x: torch.Tensor,
     conv_state: torch.Tensor,
@@ -350,266 +522,30 @@ def causal_conv1d_update(
     initial_state_idx: torch.Tensor | None = None,
     validate_data: bool = False,
 ):
-    """GPU-optimized PyTorch implementation of causal_conv1d_update.
-    
-    Handles single/multi-token updates with continuous batching support.
-    All operations run on GPU to support CUDA graph capture.
-    """
+    if num_accepted_tokens is not None:
+        raise NotImplementedError("Speculative decoding updates are not supported in the reference implementation.")
     if block_idx_last_scheduled_token is not None or initial_state_idx is not None:
-        raise NotImplementedError("Prefix caching metadata is not supported in the PyTorch reference implementation.")
+        raise NotImplementedError("Prefix caching metadata is not supported in the reference implementation.")
+    if max_query_len not in (-1, None):  # Provided only for Triton helper parity
+        raise NotImplementedError("'max_query_len' is not used in the reference implementation.")
 
     activation = _normalize_activation(activation)
-    original_dtype = x.dtype
-    work_dtype = conv_state.dtype
-    x_work = x.to(work_dtype)
-    
-    # Determine input format and reshape if needed
-    unsqueeze = query_start_loc is None and x_work.dim() == 2
-    if unsqueeze:
-        x_work = x_work.unsqueeze(-1)  # [batch, dim] -> [batch, dim, 1]
-    
-    # Get dimensions
-    if query_start_loc is None:
-        # Standard batched format: [batch, dim, seqlen]
-        batch, dim, seqlen = x_work.shape
-    else:
-        # Varlen continuous batching: [num_tokens, dim]
-        assert conv_state_indices is not None
-        batch = conv_state_indices.size(0)
-        dim = x_work.size(1) if x_work.dim() == 2 else x_work.size(0)
-        seqlen = max_query_len
-    
-    _, width = weight.shape
-    num_cache_lines, _, state_len = conv_state.shape
-    
-    # Validation
-    if validate_data:
-        assert dim == weight.size(0)
-        assert conv_state.stride(-2) == 1
-        assert state_len >= width - 1
-        assert dim == conv_state.size(1)
-        if conv_state_indices is None:
-            assert conv_state.size(0) >= batch
-        else:
-            assert (batch,) == conv_state_indices.shape
-        assert num_cache_lines >= batch
-        assert weight.stride(1) == 1
-    
-    # Prepare weight for depthwise convolution
-    weight_dw = _make_depthwise_weight(weight.to(work_dtype))
-    bias_work = bias.to(work_dtype) if bias is not None else None
-    
-    # Handle speculative decoding state offset
-    conv_state_token_offset = 0
-    if num_accepted_tokens is not None:
-        # In spec decoding, we need to shift the state window
-        # This will be handled per-sequence below
-        pass
-    
-    # Process based on input format
-    if query_start_loc is None:
-        # Standard batched processing: [batch, dim, seqlen]
-        out = _update_batched(
-            x_work, conv_state, weight_dw, bias_work,
-            conv_state_indices, num_accepted_tokens,
-            activation, pad_slot_id, width, state_len,
-            num_cache_lines, work_dtype
-        )
-    else:
-        # Varlen continuous batching: [num_tokens, dim]
-        out = _update_varlen(
-            x_work, conv_state, weight_dw, bias_work,
-            query_start_loc, conv_state_indices, num_accepted_tokens,
-            activation, pad_slot_id, width, state_len,
-            num_cache_lines, seqlen, work_dtype
-        )
-    
-    if unsqueeze:
-        out = out.squeeze(-1)
-    
-    return out.to(original_dtype)
+    dim = weight.size(0)
 
-
-def _update_batched(
-    x: torch.Tensor,  # [batch, dim, seqlen]
-    conv_state: torch.Tensor,
-    weight_dw: torch.Tensor,
-    bias: torch.Tensor | None,
-    conv_state_indices: torch.Tensor | None,
-    num_accepted_tokens: torch.Tensor | None,
-    activation: str | None,
-    pad_slot_id: int,
-    width: int,
-    state_len: int,
-    num_cache_lines: int,
-    dtype: torch.dtype,
-):
-    """Process standard batched input [batch, dim, seqlen] - CUDA graph compatible."""
-    batch, dim, seqlen = x.shape
-    device = x.device
-    out = torch.zeros_like(x)
-
-    # Resolve cache indices for the current batch.
-    if conv_state_indices is None:
-        cache_indices = torch.arange(batch, device=device, dtype=torch.long)
-    else:
-        cache_indices = conv_state_indices.to(device=device)
-        if cache_indices.dtype != torch.long:
-            cache_indices = cache_indices.to(torch.long)
-
-    if cache_indices.numel() != batch:
-        raise RuntimeError(
-            f"conv_state_indices must match batch size ({batch}), got {cache_indices.numel()}"
-        )
-
-    pad_mask = (
-        torch.zeros(batch, dtype=torch.bool, device=device)
-        if pad_slot_id is None
-        else cache_indices == pad_slot_id
+    flat_x, qsl, reshape_spec = _flatten_inputs_for_update(x, query_start_loc, dim)
+    
+    result = causal_conv1d_fn(
+        flat_x,
+        weight,
+        bias,
+        conv_state,
+        qsl,
+        cache_indices=conv_state_indices,
+        has_initial_state=None,
+        activation=activation,
+        pad_slot_id=pad_slot_id,
+        metadata=None,
+        validate_data=validate_data,
     )
 
-    is_capturing = torch.cuda.is_current_stream_capturing()
-    if not is_capturing:
-        negative_mask = cache_indices < 0
-        if torch.any(negative_mask & ~pad_mask):
-            raise RuntimeError(
-                "conv_state_indices contains negative entries other than pad_slot_id."
-            )
-
-        if torch.any(cache_indices >= num_cache_lines):
-            raise RuntimeError("conv_state_indices contains entries >= num_cache_lines.")
-
-    valid_mask = ~pad_mask
-    valid_indices = cache_indices[valid_mask]
-    if valid_indices.numel() == 0:
-        # Nothing to process (e.g. scheduler padding only)
-        return out
-
-    # Gather previous states for valid sequences.
-    selected_states = torch.index_select(conv_state, 0, valid_indices)
-
-    history_len = max(width - 1, 0)
-    if history_len > 0:
-        init_states = selected_states[:, :, -history_len:]
-    else:
-        init_states = selected_states[:, :, :0]
-
-    x_valid = x[valid_mask]
-    x_with_state = torch.cat([init_states, x_valid], dim=2)
-
-    out_valid = F.conv1d(x_with_state, weight_dw, bias=bias, groups=dim)
-    out_valid = _apply_activation(out_valid, activation)
-    out[valid_mask] = out_valid
-
-    if state_len > 0:
-        new_states = x_with_state[:, :, -state_len:]
-    else:
-        new_states = selected_states[:, :, :0]
-
-    with torch.no_grad():
-        conv_state.index_copy_(0, valid_indices, new_states)
-
-    return out
-
-
-def _update_varlen(
-    x: torch.Tensor,  # [num_tokens, dim]
-    conv_state: torch.Tensor,
-    weight_dw: torch.Tensor,
-    bias: torch.Tensor | None,
-    query_start_loc: torch.Tensor,
-    conv_state_indices: torch.Tensor,
-    num_accepted_tokens: torch.Tensor | None,
-    activation: str | None,
-    pad_slot_id: int,
-    width: int,
-    state_len: int,
-    num_cache_lines: int,
-    max_seqlen: int,
-    dtype: torch.dtype,
-):
-    """Process varlen continuous batching input [num_tokens, dim] - CUDA graph compatible.
-    
-    Note: This implementation processes each sequence separately but avoids
-    tensor indexing that would cause synchronization during graph capture.
-    For maximum performance with CUDA graphs, consider using the Triton implementation.
-    """
-    device = x.device
-    
-    # Ensure query_start_loc is on the correct device
-    qsl = query_start_loc.to(device) if query_start_loc.device != device else query_start_loc
-    batch = qsl.numel() - 1
-    
-    # Get cache indices
-    cache_indices = conv_state_indices.to(device) if conv_state_indices.device != device else conv_state_indices
-    
-    # For varlen with variable sequence lengths, we need to process sequences
-    # We'll use a simpler approach: process one token at a time using the state
-    # This is less efficient but avoids complex tensor indexing
-    
-    # Transpose for easier channel-wise processing
-    x_t = x.t().contiguous()  # [dim, num_tokens]
-    dim = x_t.size(0)
-    
-    # Output buffer
-    out_t = torch.empty_like(x_t)  # [dim, num_tokens]
-    
-    # Process each sequence (batch iteration is unavoidable for varlen)
-    # But we use vectorized ops within each iteration
-    for seq_idx in range(batch):
-        # Get sequence boundaries (these are Python ints from the iteration)
-        seq_start_idx = int(qsl[seq_idx])
-        seq_end_idx = int(qsl[seq_idx + 1])
-        seqlen = seq_end_idx - seq_start_idx
-        
-        if seqlen == 0:
-            continue
-        
-        # Get cache index for this sequence
-        cache_idx_val = int(cache_indices[seq_idx])
-        
-        # Skip padded entries
-        if cache_idx_val == pad_slot_id:
-            continue
-        
-
-            # Get cache indices
-            if conv_state_indices is None:
-                cache_indices = torch.arange(batch, device=device, dtype=torch.long)
-            else:
-                cache_indices = conv_state_indices.to(device) if conv_state_indices.device != device else conv_state_indices
-
-            # Use index_select to gather states without tensor indexing in loops
-            # conv_state: [num_cache_lines, dim, state_len]
-            # We need states for all sequences: [batch, dim, state_len]
-            selected_states = torch.index_select(conv_state, 0, cache_indices.long())  # [batch, dim, state_len]
-
-            # For standard case (no spec decoding), take last (width-1) values
-            if num_accepted_tokens is None:
-                init_states = selected_states[:, :, -(width-1):]  # [batch, dim, width-1]
-            else:
-                # For spec decoding, we'd need different offsets per sequence
-                # This is complex to vectorize, so fall back to simple case
-                # Most decode uses don't use num_accepted_tokens
-                init_states = selected_states[:, :, -(width-1):]  # [batch, dim, width-1]
-
-            # Concatenate initial states with input: [batch, dim, width-1+seqlen]
-            x_with_state = torch.cat([init_states, x], dim=2)
-
-            # Apply depthwise convolution to all sequences at once
-            # x_with_state: [batch, dim, width-1+seqlen]
-            out = F.conv1d(x_with_state, weight_dw, bias=bias, groups=dim)  # [batch, dim, seqlen]
-            out = _apply_activation(out, activation)
-
-            # Update conv_state for all sequences
-            # Take the last state_len values from the concatenated tensor
-            new_states = x_with_state[:, :, -state_len:]  # [batch, dim, state_len]
-
-            # Use scatter to update the conv_state without loops
-            # Expand cache_indices to match the shape needed for scatter
-            cache_indices_expanded = cache_indices.view(batch, 1, 1).expand(batch, dim, state_len)
-
-            # Scatter the new states back into conv_state
-            conv_state.scatter_(0, cache_indices_expanded, new_states)
-
-            return out
+    return reshape_spec.reshape_fn(result)
